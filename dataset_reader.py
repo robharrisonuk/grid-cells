@@ -23,6 +23,7 @@ import collections
 import os
 import tensorflow as tf
 import trajectory
+import numpy as np
 
 nest = tf.contrib.framework.nest
 
@@ -187,6 +188,78 @@ def CreateArtificialTFRecords(dataset, root):
                     example_proto.SerializeToString()
 
                     writer.write(example_proto.SerializeToString())
+
+
+
+# ---------------------------------------------------------------------------------
+
+# Read the data back out.
+def decode_fn(record_bytes):
+
+    return tf.io.parse_single_example(
+        # Data
+        record_bytes,
+        # Schema
+        {'init_pos':
+                tf.FixedLenFeature(shape=[2], dtype=tf.float32),
+            'init_hd':
+                tf.FixedLenFeature(shape=[1], dtype=tf.float32),
+            'ego_vel':
+                tf.FixedLenFeature(
+                    shape=[100, 3],
+                    dtype=tf.float32),
+            'target_pos':
+                tf.FixedLenFeature(
+                    shape=[100, 2],
+                    dtype=tf.float32),
+            'target_hd':
+                tf.FixedLenFeature(
+                    shape=[100, 1],
+                    dtype=tf.float32),
+         }
+    )
+
+# ---------------------------------------------------------------------------------
+
+def ConvertDataSetToNumpy(dataset, root, export_folder):
+
+    dataset_info = _DATASETS[dataset]
+    file_names = _get_dataset_files(dataset_info, root)
+    seq_len = dataset_info.sequence_length
+
+    tf.compat.v1.enable_eager_execution()
+
+    for file_name in file_names:
+
+        base_name = os.path.splitext(os.path.basename(file_name))[0]
+        export_file_name = os.path.join(export_folder, base_name+".npz")
+        print(f'Exporting: {file_name} -> {export_file_name}')
+
+        num_examples = 0
+        for _ in tf.data.TFRecordDataset([file_name]).map(decode_fn):
+            num_examples += 1
+
+        init_pos = np.empty([num_examples, 2], dtype=np.float32)
+        init_hd = np.empty([num_examples, 3], dtype=np.float32)
+        ego_vel = np.empty([num_examples, seq_len, 3], dtype=np.float32)
+        target_pos = np.empty([num_examples, seq_len, 2], dtype=np.float32)
+        target_hd = np.empty([num_examples, seq_len, 1], dtype=np.float32)
+
+        idx = 0
+        for batch in tf.data.TFRecordDataset([file_name]).map(decode_fn):
+            init_pos[idx] = batch['init_pos'].numpy()
+            init_hd[idx] = batch['init_hd'].numpy()
+            ego_vel[idx] = batch['ego_vel'].numpy()
+            target_pos[idx] = batch['target_pos'].numpy()
+            target_hd[idx] = batch['target_hd'].numpy()
+            idx += 1
+
+        np.savez_compressed(export_file_name,
+                            init_pos=init_pos,
+                            init_hd=init_hd,
+                            ego_vel=ego_vel,
+                            target_pos=target_pos,
+                            target_hd=target_hd)
 
 
 
