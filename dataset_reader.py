@@ -22,6 +22,8 @@ from __future__ import print_function
 import collections
 import os
 import tensorflow as tf
+import trajectory
+
 nest = tf.contrib.framework.nest
 
 DatasetInfo = collections.namedtuple(
@@ -36,120 +38,155 @@ _DATASETS = dict(
 
 
 def _get_dataset_files(dateset_info, root):
-  """Generates lists of files for a given dataset version."""
-  basepath = dateset_info.basepath
-  base = os.path.join(root, basepath)
-  num_files = dateset_info.size
-  template = '{:0%d}-of-{:0%d}.tfrecord' % (4, 4)
-  return [
-      os.path.join(base, template.format(i, num_files - 1))
-      for i in range(num_files)
-  ]
+    """Generates lists of files for a given dataset version."""
+    basepath = dateset_info.basepath
+    base = os.path.join(root, basepath)
+    num_files = dateset_info.size
+    template = '{:0%d}-of-{:0%d}.tfrecord' % (4, 4)
+    return [
+        os.path.join(base, template.format(i, num_files - 1))
+            for i in range(num_files)]
 
 
 class DataReader(object):
-  """Minimal queue based TFRecord reader.
+    """Minimal queue based TFRecord reader.
 
-  You can use this reader to load the datasets used to train the grid cell
-  network in the 'Vector-based Navigation using Grid-like Representations
-  in Artificial Agents' paper.
-  See README.md for a description of the datasets and an example of how to use
-  the reader.
-  """
-
-  def __init__(
-      self,
-      dataset,
-      root,
-      # Queue params
-      num_threads=4,
-      capacity=256,
-      min_after_dequeue=128,
-      seed=None):
-    """Instantiates a DataReader object and sets up queues for data reading.
-
-    Args:
-      dataset: string, one of ['jaco', 'mazes', 'rooms_ring_camera',
-        'rooms_free_camera_no_object_rotations',
-        'rooms_free_camera_with_object_rotations', 'shepard_metzler_5_parts',
-        'shepard_metzler_7_parts'].
-      root: string, path to the root folder of the data.
-      num_threads: (optional) integer, number of threads used to feed the reader
-        queues, defaults to 4.
-      capacity: (optional) integer, capacity of the underlying
-        RandomShuffleQueue, defaults to 256.
-      min_after_dequeue: (optional) integer, min_after_dequeue of the underlying
-        RandomShuffleQueue, defaults to 128.
-      seed: (optional) integer, seed for the random number generators used in
-        the reader.
-
-    Raises:
-      ValueError: if the required version does not exist;
+    You can use this reader to load the datasets used to train the grid cell
+    network in the 'Vector-based Navigation using Grid-like Representations
+    in Artificial Agents' paper.
+    See README.md for a description of the datasets and an example of how to use
+    the reader.
     """
 
-    if dataset not in _DATASETS:
-      raise ValueError('Unrecognized dataset {} requested. Available datasets '
+    def __init__(
+        self,
+        dataset,
+        root,
+        # Queue params
+        num_threads=4,
+        capacity=256,
+        min_after_dequeue=128,
+        seed=None):
+        """Instantiates a DataReader object and sets up queues for data reading.
+
+        Args:
+          dataset: string, one of ['jaco', 'mazes', 'rooms_ring_camera',
+            'rooms_free_camera_no_object_rotations',
+            'rooms_free_camera_with_object_rotations', 'shepard_metzler_5_parts',
+            'shepard_metzler_7_parts'].
+          root: string, path to the root folder of the data.
+          num_threads: (optional) integer, number of threads used to feed the reader
+            queues, defaults to 4.
+          capacity: (optional) integer, capacity of the underlying
+            RandomShuffleQueue, defaults to 256.
+          min_after_dequeue: (optional) integer, min_after_dequeue of the underlying
+            RandomShuffleQueue, defaults to 128.
+          seed: (optional) integer, seed for the random number generators used in
+            the reader.
+
+        Raises:
+          ValueError: if the required version does not exist;
+        """
+
+        if dataset not in _DATASETS:
+            raise ValueError('Unrecognized dataset {} requested. Available datasets '
                        'are {}'.format(dataset, _DATASETS.keys()))
 
-    self._dataset_info = _DATASETS[dataset]
-    self._steps = _DATASETS[dataset].sequence_length
+        self._dataset_info = _DATASETS[dataset]
+        self._steps = _DATASETS[dataset].sequence_length
 
+        with tf.device('/cpu'):
+            file_names = _get_dataset_files(self._dataset_info, root)
+            filename_queue = tf.train.string_input_producer(file_names, seed=seed)
+            reader = tf.TFRecordReader()
+
+            read_ops = [
+                self._make_read_op(reader, filename_queue) for _ in range(num_threads)
+            ]
+            dtypes = nest.map_structure(lambda x: x.dtype, read_ops[0])
+            shapes = nest.map_structure(lambda x: x.shape[1:], read_ops[0])
+
+            self._queue = tf.RandomShuffleQueue(
+              capacity=capacity,
+              min_after_dequeue=min_after_dequeue,
+              dtypes=dtypes,
+              shapes=shapes,
+              seed=seed)
+
+            enqueue_ops = [self._queue.enqueue_many(op) for op in read_ops]
+            tf.train.add_queue_runner(tf.train.QueueRunner(self._queue, enqueue_ops))
+
+    def read(self, batch_size):
+        """Reads batch_size."""
+        in_pos, in_hd, ego_vel, target_pos, target_hd = self._queue.dequeue_many(batch_size)
+        return in_pos, in_hd, ego_vel, target_pos, target_hd
+
+    def get_coord_range(self):
+        return self._dataset_info.coord_range
+
+    def _make_read_op(self, reader, filename_queue):
+        """Instantiates the ops used to read and parse the data into tensors."""
+        _, raw_data = reader.read_up_to(filename_queue, num_records=64)
+        feature_map = {
+            'init_pos':
+                tf.FixedLenFeature(shape=[2], dtype=tf.float32),
+            'init_hd':
+                tf.FixedLenFeature(shape=[1], dtype=tf.float32),
+            'ego_vel':
+                tf.FixedLenFeature(
+                    shape=[self._dataset_info.sequence_length, 3],
+                    dtype=tf.float32),
+            'target_pos':
+                tf.FixedLenFeature(
+                    shape=[self._dataset_info.sequence_length, 2],
+                    dtype=tf.float32),
+            'target_hd':
+                tf.FixedLenFeature(
+                    shape=[self._dataset_info.sequence_length, 1],
+                    dtype=tf.float32),
+        }
+        example = tf.parse_example(raw_data, feature_map)
+        batch = [
+            example['init_pos'], example['init_hd'],
+            example['ego_vel'][:, :self._steps, :],
+            example['target_pos'][:, :self._steps, :],
+            example['target_hd'][:, :self._steps, :]
+        ]
+        return batch
+
+
+# ---------------------------------------------------------------------------------
+
+def CreateArtificialTFRecords(dataset, root):
     with tf.device('/cpu'):
-      file_names = _get_dataset_files(self._dataset_info, root)
-      filename_queue = tf.train.string_input_producer(file_names, seed=seed)
-      reader = tf.TFRecordReader()
+        dataset_info = _DATASETS[dataset]
+        file_names = _get_dataset_files(dataset_info, root)
 
-      read_ops = [
-          self._make_read_op(reader, filename_queue) for _ in range(num_threads)
-      ]
-      dtypes = nest.map_structure(lambda x: x.dtype, read_ops[0])
-      shapes = nest.map_structure(lambda x: x.shape[1:], read_ops[0])
+        sequence_length = dataset_info.sequence_length
 
-      self._queue = tf.RandomShuffleQueue(
-          capacity=capacity,
-          min_after_dequeue=min_after_dequeue,
-          dtypes=dtypes,
-          shapes=shapes,
-          seed=seed)
+        for f in file_names:
+            with tf.io.TFRecordWriter(f) as writer:
+                for i in range(100):
+                    traj, _ = trajectory.trajectory_builder(sequence_length, 1, -1.0, 1.0, -1.0, 1.0)
 
-      enqueue_ops = [self._queue.enqueue_many(op) for op in read_ops]
-      tf.train.add_queue_runner(tf.train.QueueRunner(self._queue, enqueue_ops))
+                    init_pos = traj['init_pos'].reshape(2)
+                    init_hd = traj['init_hd'].reshape(1)
+                    ego_vel = traj['ego_vel'].reshape(-1)
+                    target_pos = traj['target_pos'].reshape(-1)
+                    target_hd = traj['target_hd'].reshape(-1)
 
-  def read(self, batch_size):
-    """Reads batch_size."""
-    in_pos, in_hd, ego_vel, target_pos, target_hd = self._queue.dequeue_many(
-        batch_size)
-    return in_pos, in_hd, ego_vel, target_pos, target_hd
+                    feature = {
+                        'init_pos': tf.train.Feature(float_list=tf.train.FloatList(value=init_pos)),
+                        'init_hd': tf.train.Feature(float_list=tf.train.FloatList(value=init_hd)),
+                        'ego_vel': tf.train.Feature(float_list=tf.train.FloatList(value=ego_vel)),
+                        'target_pos': tf.train.Feature(float_list=tf.train.FloatList(value=target_pos)),
+                        'target_hd': tf.train.Feature(float_list=tf.train.FloatList(value=target_hd))
+                    }
 
-  def get_coord_range(self):
-    return self._dataset_info.coord_range
+                    example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
+                    example_proto.SerializeToString()
 
-  def _make_read_op(self, reader, filename_queue):
-    """Instantiates the ops used to read and parse the data into tensors."""
-    _, raw_data = reader.read_up_to(filename_queue, num_records=64)
-    feature_map = {
-        'init_pos':
-            tf.FixedLenFeature(shape=[2], dtype=tf.float32),
-        'init_hd':
-            tf.FixedLenFeature(shape=[1], dtype=tf.float32),
-        'ego_vel':
-            tf.FixedLenFeature(
-                shape=[self._dataset_info.sequence_length, 3],
-                dtype=tf.float32),
-        'target_pos':
-            tf.FixedLenFeature(
-                shape=[self._dataset_info.sequence_length, 2],
-                dtype=tf.float32),
-        'target_hd':
-            tf.FixedLenFeature(
-                shape=[self._dataset_info.sequence_length, 1],
-                dtype=tf.float32),
-    }
-    example = tf.parse_example(raw_data, feature_map)
-    batch = [
-        example['init_pos'], example['init_hd'],
-        example['ego_vel'][:, :self._steps, :],
-        example['target_pos'][:, :self._steps, :],
-        example['target_hd'][:, :self._steps, :]
-    ]
-    return batch
+                    writer.write(example_proto.SerializeToString())
+
+
+

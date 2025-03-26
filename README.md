@@ -70,3 +70,9 @@ $ python train.py --task_root='path/to/datasets/root/folder' --saver_results_dir
 
 Disclaimer: This is not an official Google product.
 
+
+## Data generation (THIS FORK)
+
+The original data no longer exists.
+To create artificial versions of the training data, use dataset_reader.CreateArtificialTFRecords().
+
