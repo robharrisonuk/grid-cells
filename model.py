@@ -31,7 +31,7 @@ def displaced_linear_initializer(input_size, displace, dtype=tf.float32):
 
 
 class GridCellsRNNCell(snt.RNNCore):
-  """LSTM core implementation for the grid cell network."""
+    """LSTM core implementation for the grid cell network."""
 
     def __init__(self,
                    target_ensembles,
@@ -126,7 +126,7 @@ class GridCellsRNNCell(snt.RNNCore):
 
 
 class GridCellsRNN(snt.AbstractModule):
-      """RNN computes place and head-direction cell predictions from velocities."""
+    """RNN computes place and head-direction cell predictions from velocities."""
 
     def __init__(self, rnn_cell, nh_lstm, name="grid_cell_supervised"):
         super(GridCellsRNN, self).__init__(name=name)

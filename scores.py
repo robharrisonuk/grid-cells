@@ -204,16 +204,16 @@ class GridScorer(object):
         # ax.pcolormesh(useful_sac, *args, **kwargs)
         # Plot a ring for the adequate mask
         if mask_params is not None:
-              center = self._nbins - 1
-              ax.add_artist(
-                  plt.Circle(
+            center = self._nbins - 1
+            ax.add_artist(
+                plt.Circle(
                       (center, center),
                       mask_params[0] * self._nbins,
                       # lw=bump_size,
                       fill=False,
                       edgecolor='k'))
-              ax.add_artist(
-                  plt.Circle(
+            ax.add_artist(
+                plt.Circle(
                       (center, center),
                       mask_params[1] * self._nbins,
                       # lw=bump_size,
