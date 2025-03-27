@@ -240,7 +240,7 @@ def ConvertDataSetToNumpy(dataset, root, export_folder):
             num_examples += 1
 
         init_pos = np.empty([num_examples, 2], dtype=np.float32)
-        init_hd = np.empty([num_examples, 3], dtype=np.float32)
+        init_hd = np.empty([num_examples, 1], dtype=np.float32)
         ego_vel = np.empty([num_examples, seq_len, 3], dtype=np.float32)
         target_pos = np.empty([num_examples, seq_len, 2], dtype=np.float32)
         target_hd = np.empty([num_examples, seq_len, 1], dtype=np.float32)
