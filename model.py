@@ -24,10 +24,37 @@ import numpy
 import sonnet as snt
 import tensorflow as tf
 
+from tensorflow.python.framework import ops
+from tensorflow.python.ops import standard_ops
+from tensorflow.python.ops import nn
+import numbers
+import traceback
 
 def displaced_linear_initializer(input_size, displace, dtype=tf.float32):
     stddev = 1. / numpy.sqrt(input_size)
     return tf.truncated_normal_initializer(mean=displace*stddev, stddev=stddev, dtype=dtype)
+
+
+def l2_regularizer(scale, scope=None):
+
+    if isinstance(scale, numbers.Integral):
+        raise ValueError('scale cannot be an integer: %s' % (scale,))
+    if isinstance(scale, numbers.Real):
+        if scale < 0.:
+            raise ValueError('Setting a scale less than 0 on a regularizer: %g.' % scale)
+    #if scale == 0.:
+    #    print('Scale of 0 disables regularizer.')
+    #    return lambda _: None
+
+    def l2(weights):
+        """Applies l2 regularization to weights."""
+        with ops.op_scope([weights], scope, 'l2_regularizer') as name:
+            my_scale = ops.convert_to_tensor(scale,
+                                       dtype=weights.dtype.base_dtype,
+                                       name='scale_blahblah')
+        return standard_ops.mul(my_scale, nn.l2_loss(weights), name=name + '_blazblaz')
+
+    return l2
 
 
 class GridCellsRNNCell(snt.RNNCore):
@@ -86,14 +113,22 @@ class GridCellsRNNCell(snt.RNNCore):
         lstm_inputs = conc_inputs
         # LSTM
         lstm_output, next_state = self._lstm(lstm_inputs, prev_state)
+
+        weight_decay = self._bottleneck_weight_decay
+        #weight_decay = 0.0
+
+        # N.B...
+        # REMOVING REGULARIZER LINE FROM below, changes something in the initialization
+        # which means the ens_outputs have different initial weights.
+        # Instead, set weight_decay to zero above.
+
         # Bottleneck
         bottleneck = snt.Linear(self._nh_bottleneck,
                                 use_bias=self._bottleneck_has_bias,
-                                regularizers={
-                                    "w": tf.contrib.layers.l2_regularizer(
-                                        self._bottleneck_weight_decay)},
-                                name="bottleneck")(lstm_output)
-
+                                name="bottleneck",
+                                regularizers={"w": l2_regularizer(weight_decay)}
+                                )(lstm_output)
+        '''
         if self.training and self._dropoutrates_bottleneck is not None:
               tf.logging.info("Adding dropout layers")
               n_scales = len(self._dropoutrates_bottleneck)
@@ -101,11 +136,11 @@ class GridCellsRNNCell(snt.RNNCore):
               dropped_pops = [tf.nn.dropout(pop, rate, name="dropout")
                               for rate, pop in zip(self._dropoutrates_bottleneck, scale_pops)]
               bottleneck = tf.concat(dropped_pops, axis=1)
-
+        '''
         # Outputs
         ens_outputs = [snt.Linear(
                             ens.n_cells,
-                            regularizers={ "w": tf.contrib.layers.l2_regularizer(self._bottleneck_weight_decay) },
+                            regularizers={ "w": l2_regularizer(weight_decay)},
                             initializers={ "w": displaced_linear_initializer(self._nh_bottleneck,
                                                              self._init_weight_disp,
                                                              dtype=tf.float32)},
