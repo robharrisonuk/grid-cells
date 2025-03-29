@@ -24,6 +24,7 @@ import matplotlib
 import numpy as np
 import tensorflow as tf
 #import Tkinter  # pylint: disable=unused-import
+import tensorboard
 
 matplotlib.use('Agg')
 
@@ -126,26 +127,18 @@ def train():
     #dataset_reader.CreateArtificialTFRecords(FLAGS.task_dataset_info, FLAGS.task_root)
     #exit(0)
 
-    tf.reset_default_graph()
+    enable_saving = False
+
+    np.set_printoptions(precision=16, floatmode='fixed', suppress=True, linewidth=200)
+    tf.compat.v1.reset_default_graph()
 
      # Create the motion models for training and evaluation
 
+    np.random.seed(1234)
+    tf.set_random_seed(1234)
+
     data_reader = dataset_reader.DataReader(FLAGS.task_dataset_info, root=FLAGS.task_root, num_threads=4)
     train_traj = data_reader.read(batch_size=FLAGS.training_minibatch_size)
-
-    #np.random.seed(1234)
-    #tf.set_random_seed(1234)
-    #train_traj = create_traj()
-
-    '''
-    train_traj = (
-        tf.constant([[0.0, 0.0]], dtype=tf.float32),                  # Initial position [b, 2]
-        tf.constant([[0.0]], dtype=tf.float32),                       # Initial heading [b, 1]
-        tf.constant([[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]]),            # Ego velocities [b, seq_len, 3]
-        tf.constant([[[0.0, 0.0], [0.0, 0.0]]], dtype=tf.float32),    # Target positions [b, seq_len, 2]
-        tf.constant([[[0.0], [0.0]]], dtype=tf.float32)               # Target heading [b, seq_len, 1]
-    )
-    '''
 
     # Create the ensembles that provide targets during training
     place_cell_ensembles = utils.get_place_cell_ensembles(
@@ -200,28 +193,6 @@ def train():
     outputs, _ = rnn(initial_conds, inputs, training=True)
     ensembles_logits, bottleneck, lstm_output, lstm_input, init_state, init_cell = outputs
 
-    '''
-    with tf.train.SingularMonitoredSession() as sess:
-        res = sess.run(bottleneck)
-        print(res[0, 0])
-    
-    # Save model to npz file - for concurrent debugging with torch version.
-    # Need to have run an evaluation first to get initialized weights.
-    
-    with tf.train.SingularMonitoredSession() as sess:
-        vars = tf.compat.v1.trainable_variables()
-        res = sess.run(vars)
-        save_dict = {}
-        for v, n in zip(res, vars):
-        name = n.name.replace('/', '_')
-        save_dict[name] = v
-        
-        print(save_dict['grid_cells_core_bottleneck_w:0'][0, 0])
-        
-        np.savez('/home/rharrison/Development2/Stanford/Data/kaolin-behaviour/outputs/ab_train/tf.npz', **save_dict)
-        exit(0)
-    '''
-
     # Training loss
     pc_loss = tf.nn.softmax_cross_entropy_with_logits_v2(
         labels=ensembles_targets[0], logits=ensembles_logits[0], name='pc_loss')
@@ -262,14 +233,17 @@ def train():
         for epoch in range(FLAGS.training_epochs):
             loss_acc = list()
             for _ in range(FLAGS.training_steps_per_epoch):
-                res = sess.run({'train_op': train_op, 'total_loss': train_loss})
+                session_vars = {
+                    'total_loss': train_loss,
+                    'train_op': train_op,
+                }
+                res = sess.run(session_vars)
                 loss_acc.append(res['total_loss'])
 
             tf.compat.v1.logging.info('Epoch %i, mean loss %.5f, std loss %.5f', epoch, np.mean(loss_acc), np.std(loss_acc))
 
-            if epoch % FLAGS.saver_eval_time == 0:
-
-                # Save checkpoint.
+            # Save checkpoint.
+            if enable_saving:
                 vars = tf.compat.v1.trainable_variables()
                 res = sess.run(vars)
                 save_dict = {}
@@ -277,6 +251,8 @@ def train():
                     name = n.name.replace('/', '_')
                     save_dict[name] = v
                 np.savez(os.path.join(FLAGS.saver_results_directory, f'epoch_{epoch}.npz'), **save_dict)
+
+            if enable_saving and epoch % FLAGS.saver_eval_time == 0:
 
                 # Generate pdf.
                 res = dict()
