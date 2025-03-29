@@ -97,7 +97,7 @@ def clip_bottleneck_gradient(g, var, limit):
         return (g, var)
 
 
-def no_clipping(g, var):
+def no_clipping(g, var, limit):
     return (g, var)
 
 
